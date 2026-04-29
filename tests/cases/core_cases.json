@@ -1,0 +1,56 @@
+{
+  "name": "core-synthetic",
+  "pages": [
+    [1, "Rule A: Wear insulated gloves. Rule B: Keep device dry."],
+    [2, "Inspect monthly; replace filter every 6 months."]
+  ],
+  "indexer": {
+    "min_chunk_chars": 20
+  },
+  "cases": [
+    {
+      "id": "safety-gear",
+      "question": "What should I wear?",
+      "expect_refusal": false,
+      "must_cite": [1],
+      "must_include": ["gloves"],
+      "min_score": 0.1
+    },
+    {
+      "id": "keep-dry",
+      "question": "How should I keep the device safe from moisture?",
+      "expect_refusal": false,
+      "must_cite": [1],
+      "must_include": ["dry"],
+      "min_score": 0.1
+    },
+    {
+      "id": "filter-replace",
+      "question": "How often should the filter be replaced?",
+      "expect_refusal": false,
+      "must_cite": [2],
+      "must_include": ["6 months"],
+      "min_score": 0.1
+    },
+    {
+      "id": "inspection-frequency",
+      "question": "How often should we inspect the device?",
+      "expect_refusal": false,
+      "must_cite": [2],
+      "must_include": ["inspect"],
+      "min_score": 0.1
+    },
+    {
+      "id": "out-of-scope-stock",
+      "question": "What is the company stock price?",
+      "expect_refusal": true,
+      "min_score": 0.6
+    },
+    {
+      "id": "out-of-scope-founder",
+      "question": "Who founded the company?",
+      "expect_refusal": true,
+      "min_score": 0.6
+    }
+  ]
+}
