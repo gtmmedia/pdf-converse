@@ -22,6 +22,20 @@ st.title("PDF-Constrained Conversational Agent")
 st.caption("Upload a PDF and ask questions grounded in its contents.")
 
 
+def rerun_app() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
+with st.sidebar:
+    if st.button("Reset app"):
+        st.cache_resource.clear()
+        st.session_state.clear()
+        rerun_app()
+
+
 @st.cache_resource(show_spinner=False)
 def build_indexer() -> PdfIndexer:
     cache_dir = Path(tempfile.gettempdir()) / "pdf_converse_cache"
