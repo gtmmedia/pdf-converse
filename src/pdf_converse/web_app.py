@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import tempfile
-from typing import List, Tuple
+from pathlib import Path
+from threading import Lock
+from typing import Dict
 
 import streamlit as st
 
@@ -23,7 +27,28 @@ st.caption("Upload a PDF and ask questions grounded in its contents.")
 
 @st.cache_resource(show_spinner=False)
 def build_indexer() -> PdfIndexer:
-    return PdfIndexer()
+    cache_dir = Path(tempfile.gettempdir()) / "pdf_converse_cache"
+    return PdfIndexer(cache_dir=cache_dir)
+
+
+@st.cache_resource(show_spinner=False)
+def build_executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=1)
+
+
+@st.cache_resource(show_spinner=False)
+def build_progress_state() -> Dict[str, object]:
+    return {"current": 0, "total": 0, "lock": Lock()}
+
+
+def _index_pdf_task(indexer: PdfIndexer, pdf_path: str, progress_state: Dict[str, object]) -> None:
+    def progress_cb(current: int, total: int) -> None:
+        lock = progress_state["lock"]
+        with lock:
+            progress_state["current"] = current
+            progress_state["total"] = total
+
+    indexer.index_pdf(pdf_path, progress_cb=progress_cb)
 
 
 if "chat_history" not in st.session_state:
@@ -31,6 +56,14 @@ if "chat_history" not in st.session_state:
 
 if "agent" not in st.session_state:
     st.session_state.agent = None
+if "pdf_hash" not in st.session_state:
+    st.session_state.pdf_hash = None
+if "index_future" not in st.session_state:
+    st.session_state.index_future = None
+if "index_error" not in st.session_state:
+    st.session_state.index_error = None
+if "indexing_hash" not in st.session_state:
+    st.session_state.indexing_hash = None
 
 
 uploaded = st.file_uploader("Upload a PDF", type=["pdf"])
@@ -49,14 +82,58 @@ with col3:
     top_k = st.slider("Top matches", min_value=1, max_value=5, value=3)
 
 if uploaded is not None:
+    file_bytes = uploaded.getvalue()
+    file_hash = hashlib.sha256(file_bytes).hexdigest()
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(uploaded.read())
+        tmp.write(file_bytes)
         tmp_path = tmp.name
 
-    with st.spinner("Indexing PDF..."):
-        indexer = build_indexer()
-        indexer.index_pdf(tmp_path)
-        st.session_state.agent = PdfConverseAgent(indexer=indexer, min_score=min_score, top_k=top_k, language=language)
+    indexer = build_indexer()
+    executor = build_executor()
+    progress_state = build_progress_state()
+
+    if st.session_state.pdf_hash != file_hash:
+        if st.session_state.index_future is None and st.session_state.indexing_hash != file_hash:
+            st.session_state.index_error = None
+            st.session_state.indexing_hash = file_hash
+            with progress_state["lock"]:
+                progress_state["current"] = 0
+                progress_state["total"] = 0
+            st.session_state.index_future = executor.submit(
+                _index_pdf_task, indexer, tmp_path, progress_state
+            )
+
+        if st.session_state.index_future and st.session_state.index_future.done():
+            try:
+                st.session_state.index_future.result()
+                st.session_state.pdf_hash = st.session_state.indexing_hash
+            except Exception as exc:
+                st.session_state.index_error = str(exc)
+            finally:
+                st.session_state.index_future = None
+
+        if st.session_state.index_error:
+            st.error(f"Indexing failed: {st.session_state.index_error}")
+            st.stop()
+
+        if st.session_state.pdf_hash != file_hash:
+            with progress_state["lock"]:
+                current = int(progress_state["current"])
+                total = int(progress_state["total"])
+            if total > 0:
+                st.progress(current / total, text=f"Indexing pages {current}/{total}...")
+            else:
+                st.info("Indexing PDF in background. Click 'Check status' to refresh.")
+            st.button("Check status")
+            st.stop()
+
+    st.session_state.agent = PdfConverseAgent(
+        indexer=indexer,
+        min_score=min_score,
+        top_k=top_k,
+        language=language,
+    )
 
     st.success("PDF indexed. Ask a question below.")
 

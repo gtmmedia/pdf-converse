@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+import hashlib
+import json
+from pathlib import Path
+from typing import Callable, List, Sequence, Tuple
 
 from pypdf import PdfReader
+import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -22,24 +26,46 @@ class PdfIndexer:
         chunk_size: int = 800,
         chunk_overlap: int = 200,
         min_chunk_chars: int = 200,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.min_chunk_chars = min_chunk_chars
         self.vectorizer = TfidfVectorizer(stop_words="english")
+        self.cache_dir = Path(cache_dir) if cache_dir else None
         self._chunks: List[PageChunk] = []
         self._matrix = None
 
-    def load_pdf(self, pdf_path: str) -> List[Tuple[int, str]]:
+    def load_pdf(
+        self,
+        pdf_path: str,
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> List[Tuple[int, str]]:
         reader = PdfReader(pdf_path)
         pages: List[Tuple[int, str]] = []
-        for idx, page in enumerate(reader.pages):
+        total = len(reader.pages)
+        for idx, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
-            pages.append((idx + 1, normalize_whitespace(text)))
+            pages.append((idx, normalize_whitespace(text)))
+            if progress_cb:
+                progress_cb(idx, total)
         return pages
 
-    def index_pdf(self, pdf_path: str) -> None:
-        self.index_from_texts(self.load_pdf(pdf_path))
+    def index_pdf(
+        self,
+        pdf_path: str,
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> None:
+        cache_key = self._cache_key(pdf_path)
+        if cache_key and self._load_cache(cache_key):
+            return
+
+        pages = self.load_pdf(pdf_path, progress_cb=progress_cb)
+        self.index_from_texts(pages)
+        if progress_cb and pages:
+            progress_cb(len(pages), len(pages))
+        if cache_key:
+            self._save_cache(cache_key)
 
     def index_from_texts(self, pages: Sequence[Tuple[int, str]]) -> None:
         chunks = self._chunk_pages(pages)
@@ -95,3 +121,51 @@ class PdfIndexer:
             if total >= self.chunk_overlap:
                 break
         return count
+
+    def _cache_key(self, pdf_path: str) -> str | None:
+        if self.cache_dir is None:
+            return None
+        path = Path(pdf_path)
+        if not path.exists():
+            return None
+
+        hasher = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        settings = {
+            "chunk_size": self.chunk_size,
+            "chunk_overlap": self.chunk_overlap,
+            "min_chunk_chars": self.min_chunk_chars,
+        }
+        digest = hasher.hexdigest()
+        settings_hash = hashlib.sha256(json.dumps(settings, sort_keys=True).encode("utf-8")).hexdigest()
+        return f"pdf_index_{digest}_{settings_hash}"
+
+    def _cache_path(self, cache_key: str) -> Path:
+        assert self.cache_dir is not None
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        return self.cache_dir / f"{cache_key}.joblib"
+
+    def _load_cache(self, cache_key: str) -> bool:
+        if self.cache_dir is None:
+            return False
+        cache_path = self._cache_path(cache_key)
+        if not cache_path.exists():
+            return False
+        payload = joblib.load(cache_path)
+        self.vectorizer = payload["vectorizer"]
+        self._matrix = payload["matrix"]
+        self._chunks = payload["chunks"]
+        return True
+
+    def _save_cache(self, cache_key: str) -> None:
+        if self.cache_dir is None:
+            return
+        cache_path = self._cache_path(cache_key)
+        payload = {
+            "vectorizer": self.vectorizer,
+            "matrix": self._matrix,
+            "chunks": self._chunks,
+        }
+        joblib.dump(payload, cache_path)
