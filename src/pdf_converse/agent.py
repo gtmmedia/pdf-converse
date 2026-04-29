@@ -21,26 +21,34 @@ class Answer:
 
 
 class PdfConverseAgent:
-    def __init__(self, indexer: PdfIndexer, min_score: float = 0.15, top_k: int = 3, language: str | None = None) -> None:
+    def __init__(
+        self,
+        indexer: PdfIndexer,
+        min_score: float = 0.15,
+        top_k: int = 3,
+        language: str | None = None,
+    ) -> None:
         self.indexer = indexer
         self.min_score = min_score
         self.top_k = top_k
         self.language = language or "en"
-        self.history: List[Tuple[str, str]] = []
 
-    def answer(self, question: str) -> Answer:
+    def answer(self, question: str, language: str | None = None) -> Answer:
+        self._update_language(question, language)
+
         matches = self.indexer.query(question, top_k=self.top_k)
         if not matches or matches[0][1] < self.min_score:
             return self._refusal()
 
-        selected = self._select_sentences(question, matches)
+        selected = self._select_sentences(question, matches, self.language)
         if not selected:
             best_chunk = matches[0][0]
             excerpt = best_chunk.text[:500].rstrip()
             return Answer(text=excerpt, citations=[best_chunk.page_num], refused=False)
 
-        answer_text = " ".join(item[0] for item in selected)
-        citations = sorted({item[1] for item in selected})
+        ordered = self._dedupe_sentences(selected)
+        answer_text = "\n".join(f"- {sentence}" for sentence, _page in ordered)
+        citations = sorted({page for _sentence, page in ordered})
         return Answer(text=answer_text, citations=citations, refused=False)
 
     def format_response(self, answer: Answer) -> str:
@@ -66,10 +74,19 @@ class PdfConverseAgent:
             refused=True,
         )
 
+    def _update_language(self, question: str, language: str | None) -> None:
+        if language:
+            self.language = language
+        elif detect_language:
+            self.language = detect_language(question)
+
     def _select_sentences(
-        self, question: str, matches: Sequence[Tuple[PageChunk, float]]
+        self,
+        question: str,
+        matches: Sequence[Tuple[PageChunk, float]],
+        language: str = "en",
     ) -> List[Tuple[str, int]]:
-        keywords = extract_keywords(question)
+        keywords = extract_keywords(question, language)
         candidates: List[Tuple[str, int, int]] = []
         for chunk, _score in matches:
             for sentence in split_sentences(chunk.text):
@@ -82,3 +99,15 @@ class PdfConverseAgent:
                 candidates.append((cleaned, chunk.page_num, score))
         candidates.sort(key=lambda item: item[2], reverse=True)
         return [(sentence, page) for sentence, page, _score in candidates[:3]]
+
+    @staticmethod
+    def _dedupe_sentences(items: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
+        seen = set()
+        deduped = []
+        for sentence, page in items:
+            normalized = sentence.strip().lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append((sentence.strip(), page))
+        return deduped

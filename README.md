@@ -46,3 +46,12 @@ Trade-offs:
 
 ## Notes on Grounding
 Answers are constructed only from text retrieved from the PDF. If the similarity score is too low, the agent refuses. This enforces strict grounding and reduces hallucination risk.
+
+## Observability and Testability
+- The web UI shows index stats (page count, chunk count, cache hit) under "Index details."
+- Tests are data-driven via JSON case files in [tests/cases](tests/cases).
+- You can add external test suites via `PDF_CONVERSE_TEST_CASES_DIR` or `PDF_CONVERSE_TEST_CASES`.
+
+## Deployment Notes
+- Streamlit Cloud entry point: `streamlit_app.py`.
+- Cached indexes are stored in the system temp directory to speed up re-runs.

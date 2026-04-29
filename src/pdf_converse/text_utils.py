@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Sequence, Tuple
+from typing import List, Sequence
 
 
 def normalize_whitespace(text: str) -> str:

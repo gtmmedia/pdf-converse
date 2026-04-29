@@ -33,6 +33,9 @@ class PdfIndexer:
         self.min_chunk_chars = min_chunk_chars
         self.vectorizer = TfidfVectorizer(stop_words="english")
         self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.page_count = 0
+        self.chunk_count = 0
+        self.cache_hit = False
         self._chunks: List[PageChunk] = []
         self._matrix = None
 
@@ -44,6 +47,7 @@ class PdfIndexer:
         reader = PdfReader(pdf_path)
         pages: List[Tuple[int, str]] = []
         total = len(reader.pages)
+        self.page_count = total
         for idx, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
             pages.append((idx, normalize_whitespace(text)))
@@ -56,8 +60,10 @@ class PdfIndexer:
         pdf_path: str,
         progress_cb: Callable[[int, int], None] | None = None,
     ) -> None:
+        self.cache_hit = False
         cache_key = self._cache_key(pdf_path)
         if cache_key and self._load_cache(cache_key):
+            self.cache_hit = True
             return
 
         pages = self.load_pdf(pdf_path, progress_cb=progress_cb)
@@ -70,10 +76,18 @@ class PdfIndexer:
     def index_from_texts(self, pages: Sequence[Tuple[int, str]]) -> None:
         chunks = self._chunk_pages(pages)
         self._chunks = chunks
+        self.chunk_count = len(chunks)
         if not chunks:
             self._matrix = None
             return
         self._matrix = self.vectorizer.fit_transform([chunk.text for chunk in chunks])
+
+    def stats(self) -> dict:
+        return {
+            "pages": self.page_count,
+            "chunks": self.chunk_count,
+            "cache_hit": self.cache_hit,
+        }
 
     def query(self, question: str, top_k: int = 3) -> List[Tuple[PageChunk, float]]:
         if not self._chunks or self._matrix is None:
@@ -129,18 +143,26 @@ class PdfIndexer:
         if not path.exists():
             return None
 
+        digest = self._hash_file(path)
+        settings_hash = self._hash_settings()
+        return f"pdf_index_{digest}_{settings_hash}"
+
+    @staticmethod
+    def _hash_file(path: Path) -> str:
         hasher = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 hasher.update(chunk)
+        return hasher.hexdigest()
+
+    def _hash_settings(self) -> str:
         settings = {
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "min_chunk_chars": self.min_chunk_chars,
         }
-        digest = hasher.hexdigest()
-        settings_hash = hashlib.sha256(json.dumps(settings, sort_keys=True).encode("utf-8")).hexdigest()
-        return f"pdf_index_{digest}_{settings_hash}"
+        encoded = json.dumps(settings, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _cache_path(self, cache_key: str) -> Path:
         assert self.cache_dir is not None
@@ -157,6 +179,8 @@ class PdfIndexer:
         self.vectorizer = payload["vectorizer"]
         self._matrix = payload["matrix"]
         self._chunks = payload["chunks"]
+        self.page_count = payload.get("page_count", 0)
+        self.chunk_count = payload.get("chunk_count", len(self._chunks))
         return True
 
     def _save_cache(self, cache_key: str) -> None:
@@ -167,5 +191,7 @@ class PdfIndexer:
             "vectorizer": self.vectorizer,
             "matrix": self._matrix,
             "chunks": self._chunks,
+            "page_count": self.page_count,
+            "chunk_count": self.chunk_count,
         }
         joblib.dump(payload, cache_path)
