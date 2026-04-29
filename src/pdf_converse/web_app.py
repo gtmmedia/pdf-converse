@@ -39,7 +39,7 @@ with st.sidebar:
 @st.cache_resource(show_spinner=False)
 def build_indexer() -> PdfIndexer:
     cache_dir = Path(tempfile.gettempdir()) / "pdf_converse_cache"
-    return PdfIndexer(cache_dir=cache_dir)
+    return PdfIndexer(cache_dir=cache_dir, max_features=50000)
 
 
 def save_upload(uploaded) -> tuple[str, str]:
@@ -83,12 +83,18 @@ def init_session_state() -> None:
         st.session_state.pdf_path = None
 
 
+MAX_UPLOAD_MB = 50
+
+
 def get_upload_info(uploaded) -> tuple[str, str]:
-    file_id = getattr(uploaded, "file_id", None)
-    signature = (file_id, uploaded.name, uploaded.size)
+    signature = (uploaded.name, uploaded.size)
 
     if st.session_state.upload_sig == signature and st.session_state.pdf_path:
         return st.session_state.pdf_path, st.session_state.upload_hash
+
+    if uploaded.size and uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
+        st.error(f"PDF is too large ({uploaded.size / 1024 / 1024:.1f} MB). Max is {MAX_UPLOAD_MB} MB.")
+        st.stop()
 
     tmp_path, file_hash = save_upload(uploaded)
     st.session_state.upload_sig = signature

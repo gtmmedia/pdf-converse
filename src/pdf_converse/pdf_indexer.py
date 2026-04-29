@@ -8,6 +8,7 @@ from typing import Callable, List, Sequence, Tuple
 
 from pypdf import PdfReader
 import joblib
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -27,11 +28,17 @@ class PdfIndexer:
         chunk_overlap: int = 200,
         min_chunk_chars: int = 200,
         cache_dir: str | Path | None = None,
+        max_features: int = 50000,
     ) -> None:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.min_chunk_chars = min_chunk_chars
-        self.vectorizer = TfidfVectorizer(stop_words="english")
+        self.vectorizer = TfidfVectorizer(
+            stop_words="english",
+            max_features=max_features,
+            dtype=np.float32,
+        )
+        self.max_features = max_features
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.page_count = 0
         self.chunk_count = 0
@@ -160,6 +167,7 @@ class PdfIndexer:
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "min_chunk_chars": self.min_chunk_chars,
+            "max_features": self.max_features,
         }
         encoded = json.dumps(settings, sort_keys=True).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
