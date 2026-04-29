@@ -42,14 +42,18 @@ def build_indexer() -> PdfIndexer:
     return PdfIndexer(cache_dir=cache_dir)
 
 
-def get_pdf_hash(file_bytes: bytes) -> str:
-    return hashlib.sha256(file_bytes).hexdigest()
-
-
-def save_upload(file_bytes: bytes) -> str:
+def save_upload(uploaded) -> tuple[str, str]:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(file_bytes)
-        return tmp.name
+        hasher = hashlib.sha256()
+        uploaded.seek(0)
+        while True:
+            chunk = uploaded.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+            hasher.update(chunk)
+        uploaded.seek(0)
+        return tmp.name, hasher.hexdigest()
 
 
 def index_pdf_with_progress(indexer: PdfIndexer, pdf_path: str) -> None:
@@ -71,17 +75,35 @@ def init_session_state() -> None:
         st.session_state.agent = None
     if "pdf_hash" not in st.session_state:
         st.session_state.pdf_hash = None
+    if "upload_hash" not in st.session_state:
+        st.session_state.upload_hash = None
+    if "upload_sig" not in st.session_state:
+        st.session_state.upload_sig = None
+    if "pdf_path" not in st.session_state:
+        st.session_state.pdf_path = None
 
 
-def ensure_indexed(indexer: PdfIndexer, file_bytes: bytes) -> None:
-    file_hash = get_pdf_hash(file_bytes)
+def get_upload_info(uploaded) -> tuple[str, str]:
+    file_id = getattr(uploaded, "file_id", None)
+    signature = (file_id, uploaded.name, uploaded.size)
+
+    if st.session_state.upload_sig == signature and st.session_state.pdf_path:
+        return st.session_state.pdf_path, st.session_state.upload_hash
+
+    tmp_path, file_hash = save_upload(uploaded)
+    st.session_state.upload_sig = signature
+    st.session_state.upload_hash = file_hash
+    st.session_state.pdf_path = tmp_path
+    return tmp_path, file_hash
+
+
+def ensure_indexed(indexer: PdfIndexer, pdf_path: str, file_hash: str) -> None:
     if st.session_state.pdf_hash == file_hash:
         return
 
-    tmp_path = save_upload(file_bytes)
     with st.spinner("Indexing PDF..."):
         try:
-            index_pdf_with_progress(indexer, tmp_path)
+            index_pdf_with_progress(indexer, pdf_path)
         except Exception as exc:
             st.error(f"Indexing failed: {exc}")
             st.stop()
@@ -110,8 +132,8 @@ with col3:
 
 if uploaded is not None:
     indexer = build_indexer()
-    file_bytes = uploaded.getvalue()
-    ensure_indexed(indexer, file_bytes)
+    pdf_path, file_hash = get_upload_info(uploaded)
+    ensure_indexed(indexer, pdf_path, file_hash)
 
     st.session_state.agent = PdfConverseAgent(
         indexer=indexer,
