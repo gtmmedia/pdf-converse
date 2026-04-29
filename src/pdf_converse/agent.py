@@ -6,6 +6,12 @@ from typing import List, Sequence, Tuple
 from .pdf_indexer import PageChunk, PdfIndexer
 from .text_utils import extract_keywords, sentence_keyword_score, split_sentences
 
+try:
+    from .language_support import detect_language, format_multilingual_response
+except ImportError:
+    detect_language = None
+    format_multilingual_response = None
+
 
 @dataclass(frozen=True)
 class Answer:
@@ -15,10 +21,11 @@ class Answer:
 
 
 class PdfConverseAgent:
-    def __init__(self, indexer: PdfIndexer, min_score: float = 0.15, top_k: int = 3) -> None:
+    def __init__(self, indexer: PdfIndexer, min_score: float = 0.15, top_k: int = 3, language: str | None = None) -> None:
         self.indexer = indexer
         self.min_score = min_score
         self.top_k = top_k
+        self.language = language or "en"
         self.history: List[Tuple[str, str]] = []
 
     def answer(self, question: str) -> Answer:
@@ -37,6 +44,13 @@ class PdfConverseAgent:
         return Answer(text=answer_text, citations=citations, refused=False)
 
     def format_response(self, answer: Answer) -> str:
+        if format_multilingual_response:
+            return format_multilingual_response(
+                answer.text,
+                answer.citations,
+                self.language,
+                answer.refused,
+            )
         if answer.refused:
             return f"Answer: {answer.text}\nCitations: none (out of scope)"
         citation_text = ", ".join(f"p.{page}" for page in answer.citations)
