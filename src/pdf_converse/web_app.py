@@ -106,7 +106,10 @@ if uploaded is not None:
         language=language,
     )
 
-    stats = indexer.stats()
+    if hasattr(indexer, "stats"):
+        stats = indexer.stats()
+    else:
+        stats = {"pages": "n/a", "chunks": "n/a", "cache_hit": "n/a"}
     with st.expander("Index details", expanded=False):
         st.write(f"Pages: {stats['pages']}")
         st.write(f"Chunks: {stats['chunks']}")
